@@ -1,12 +1,21 @@
 import { defined } from "../../Source/Cesium.js";
 import { defaultValue } from "../../Source/Cesium.js";
+import { FeatureDetection } from "../../Source/Cesium.js";
 import { MetadataClass } from "../../Source/Cesium.js";
-import { MetadataOffsetType } from "../../Source/Cesium.js";
 import { MetadataTable } from "../../Source/Cesium.js";
 import { MetadataType } from "../../Source/Cesium.js";
-import MetadataComponentType from "../../Source/Scene/MetadataComponentType.js";
+import MetadataEnum from "../../Source/Scene/MetadataEnum.js";
 
 describe("Scene/MetadataTable", function () {
+  if (
+    !FeatureDetection.supportsBigInt64Array() ||
+    !FeatureDetection.supportsBigUint64Array() ||
+    !FeatureDetection.supportsBigInt() ||
+    typeof TextEncoder === "undefined"
+  ) {
+    return;
+  }
+
   // hasProperty - > take tests from other file
   // getPropertyIds -> take tests for other file
   // getProperty
@@ -51,51 +60,49 @@ describe("Scene/MetadataTable", function () {
   // don't run tests if platform doesn't support BigUint64Array (maybe just certain tests)
 
   function createBuffer(values, type) {
-    var flattenedValues = [].concat.apply([], values);
     var typedArray;
-
     switch (type) {
       case MetadataType.INT8:
-        typedArray = new Int8Array(flattenedValues);
+        typedArray = new Int8Array(values);
         break;
       case MetadataType.UINT8:
-        typedArray = new Uint8Array(flattenedValues);
+        typedArray = new Uint8Array(values);
         break;
       case MetadataType.INT16:
-        typedArray = new Int16Array(flattenedValues);
+        typedArray = new Int16Array(values);
         break;
       case MetadataType.UINT16:
-        typedArray = new Uint16Array(flattenedValues);
+        typedArray = new Uint16Array(values);
         break;
       case MetadataType.INT32:
-        typedArray = new Int32Array(flattenedValues);
+        typedArray = new Int32Array(values);
         break;
       case MetadataType.UINT32:
-        typedArray = new Uint32Array(flattenedValues);
+        typedArray = new Uint32Array(values);
         break;
       case MetadataType.INT64:
-        typedArray = new BigInt64Array(flattenedValues); // eslint-disable-line
+        typedArray = new BigInt64Array(values); // eslint-disable-line
         break;
       case MetadataType.UINT64:
-        typedArray = new BigUint64Array(flattenedValues); // eslint-disable-line
+        typedArray = new BigUint64Array(values); // eslint-disable-line
         break;
       case MetadataType.FLOAT32:
-        typedArray = new Float32Array(flattenedValues);
+        typedArray = new Float32Array(values);
         break;
       case MetadataType.FLOAT64:
-        typedArray = new Float64Array(flattenedValues);
+        typedArray = new Float64Array(values);
         break;
       case MetadataType.STRING:
         var encoder = new TextEncoder();
-        typedArray = encoder.encode(flattenedValues.join(""));
+        typedArray = encoder.encode(values.join(""));
         break;
       case MetadataType.BOOLEAN:
-        var length = Math.ceil(flattenedValues.length / 8);
+        var length = Math.ceil(values.length / 8);
         typedArray = new Uint8Array(length); // Initialized as 0's
-        for (var i = 0; i < flattenedValues.length; ++i) {
+        for (var i = 0; i < values.length; ++i) {
           var byteIndex = i >> 3;
           var bitIndex = i % 8;
-          if (flattenedValues[i]) {
+          if (values[i]) {
             typedArray[byteIndex] |= 1 << bitIndex;
           }
         }
@@ -105,37 +112,33 @@ describe("Scene/MetadataTable", function () {
     return new Uint8Array(typedArray.buffer);
   }
 
-  function getValueType(classProperty) {
-    var type = classProperty.type;
-    var componentType = classProperty.componentType;
-    var enumType = classProperty.enumType;
-
-    if (type === MetadataType.ARRAY) {
-      type = componentType;
-    }
-    if (type === MetadataType.ENUM) {
-      type = enumType;
-    }
-
-    return type;
-  }
-
   function createValuesBuffer(values, classProperty) {
-    var type = getValueType(classProperty);
-    return createBuffer(values, type);
+    var valueType = classProperty.valueType;
+    var enumType = classProperty.enumType;
+    var flattenedValues = [].concat.apply([], values);
+
+    if (defined(enumType)) {
+      var length = flattenedValues.length;
+      for (var i = 0; i < length; ++i) {
+        flattenedValues[i] = enumType.valuesByName[flattenedValues[i]];
+      }
+    }
+
+    return createBuffer(flattenedValues, valueType);
   }
 
   function createStringOffsetBuffer(values, offsetType) {
+    var encoder = new TextEncoder();
     var strings = [].concat.apply([], values);
     var length = strings.length;
     var offsets = new Array(length + 1);
     var offset = 0;
     for (var i = 0; i < length; ++i) {
       offsets[i] = offset;
-      offset += strings[i].length;
+      offset += encoder.encode(strings[i]).length;
     }
     offsets[length] = offset;
-    offsetType = defaultValue(offsetType, MetadataOffsetType.UINT32);
+    offsetType = defaultValue(offsetType, MetadataType.UINT32);
     return createBuffer(offsets, offsetType);
   }
 
@@ -148,7 +151,7 @@ describe("Scene/MetadataTable", function () {
       offset += values[i].length;
     }
     offsets[length] = offset;
-    offsetType = defaultValue(offsetType, MetadataOffsetType.UINT32);
+    offsetType = defaultValue(offsetType, MetadataType.UINT32);
     return createBuffer(offsets, offsetType);
   }
 
@@ -160,12 +163,32 @@ describe("Scene/MetadataTable", function () {
     return new Uint8Array(padded.buffer, paddingBytes, uint8Array.length);
   }
 
-  function createTable(propertiesJson, propertyValues, offsetType) {
+  function createTable(options) {
+    options = defaultValue(options, defaultValue.EMPTY_OBJECT);
+    var propertiesJson = options.properties;
+    var propertyValues = options.propertyValues;
+    var enums = defaultValue(options.enums, defaultValue.EMPTY_OBJECT);
+    var offsetType = options.offsetType;
+    var disableBigIntSupport = options.disableBigIntSupport;
+    var disableBigInt64ArraySupport = options.disableBigInt64ArraySupport;
+    var disableBigUint64ArraySupport = options.disableBigUint64ArraySupport;
+
+    var enumDefinitions = {};
+    for (var enumId in enums) {
+      if (enums.hasOwnProperty(enumId)) {
+        enumDefinitions[enumId] = new MetadataEnum({
+          id: enumId,
+          enum: enums[enumId],
+        });
+      }
+    }
+
     var classDefinition = new MetadataClass({
       id: "classId",
       class: {
         properties: propertiesJson,
       },
+      enums: enumDefinitions,
     });
 
     var properties = {};
@@ -209,7 +232,7 @@ describe("Scene/MetadataTable", function () {
 
         if (
           classProperty.type === MetadataType.STRING ||
-          classProperty.componentType === MetadataComponentType.STRING
+          classProperty.componentType === MetadataType.STRING
         ) {
           var stringOffsetBuffer = addPadding(
             createStringOffsetBuffer(values, offsetType)
@@ -221,6 +244,18 @@ describe("Scene/MetadataTable", function () {
       }
     }
 
+    if (disableBigIntSupport) {
+      spyOn(FeatureDetection, "supportsBigInt").and.returnValue(false);
+    }
+
+    if (disableBigInt64ArraySupport) {
+      spyOn(FeatureDetection, "supportsBigInt64Array").and.returnValue(false);
+    }
+
+    if (disableBigUint64ArraySupport) {
+      spyOn(FeatureDetection, "supportsBigUint64Array").and.returnValue(false);
+    }
+
     return new MetadataTable({
       count: count,
       properties: properties,
@@ -228,6 +263,25 @@ describe("Scene/MetadataTable", function () {
       bufferViews: bufferViews,
     });
   }
+
+  var enums = {
+    myEnum: {
+      values: [
+        {
+          value: 0,
+          name: "ValueA",
+        },
+        {
+          value: 1,
+          name: "ValueB",
+        },
+        {
+          value: -999,
+          name: "Other",
+        },
+      ],
+    },
+  };
 
   it("creates metadata table with default values", function () {
     var metadataTable = new MetadataTable({
@@ -253,7 +307,10 @@ describe("Scene/MetadataTable", function () {
       name: ["A", "B"],
     };
 
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     var expectedPropertyNames = ["height", "name"];
 
@@ -267,22 +324,23 @@ describe("Scene/MetadataTable", function () {
   });
 
   it("constructor throws without count", function () {
-    var buildingClass = new MetadataClass({
-      id: "building",
-      class: {},
-    });
+    expect(function () {
+      return new MetadataTable({});
+    }).toThrowDeveloperError();
+  });
 
+  it("constructor throws if count is less than 1", function () {
     expect(function () {
       return new MetadataTable({
-        properties: {},
-        class: buildingClass,
-        bufferViews: {},
+        count: 0,
       });
     }).toThrowDeveloperError();
   });
 
   it("hasProperty returns false when there's no properties", function () {
-    var metadataTable = createTable();
+    var metadataTable = new MetadataTable({
+      count: 10,
+    });
     expect(metadataTable.hasProperty("height")).toBe(false);
   });
 
@@ -295,7 +353,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(metadataTable.hasProperty("color")).toBe(false);
   });
@@ -309,7 +370,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(metadataTable.hasProperty("height")).toBe(true);
   });
@@ -329,21 +393,27 @@ describe("Scene/MetadataTable", function () {
       name: ["A", "B"],
     };
 
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(metadataTable.hasProperty("height")).toBe(true);
   });
 
   it("hasProperty throws without propertyId", function () {
-    var metadataTable = createTable();
-
+    var metadataTable = new MetadataTable({
+      count: 10,
+    });
     expect(function () {
       metadataTable.hasProperty();
     }).toThrowDeveloperError();
   });
 
   it("getPropertyIds returns empty array when there are no properties", function () {
-    var metadataTable = createTable();
+    var metadataTable = new MetadataTable({
+      count: 10,
+    });
     expect(metadataTable.getPropertyIds().length).toBe(0);
   });
 
@@ -361,7 +431,10 @@ describe("Scene/MetadataTable", function () {
       name: ["A", "B"],
     };
 
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(metadataTable.getPropertyIds().sort()).toEqual(["height", "name"]);
   });
@@ -381,7 +454,10 @@ describe("Scene/MetadataTable", function () {
       name: ["A", "B"],
     };
 
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(metadataTable.getPropertyIds().sort()).toEqual(["height", "name"]);
   });
@@ -400,7 +476,10 @@ describe("Scene/MetadataTable", function () {
       name: ["A", "B"],
     };
 
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     var results = [];
     var returnedResults = metadataTable.getPropertyIds(results);
@@ -425,38 +504,656 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(metadataTable.getProperty(0, "name")).toBeUndefined();
   });
 
-  // it("getProperty returns the property value", function () {
-  //   var buildingClass = new MetadataClass({
-  //     id: "building",
-  //     class: {
-  //       properties: {
-  //         position: {
-  //           type: "ARRAY",
-  //           componentType: "FLOAT32",
-  //           componentCount: 3,
-  //         },
-  //       },
-  //     },
-  //   });
-  //   var position = [0.0, 0.0, 0.0];
-  //   var groupMetadata = new MetadataGroup({
-  //     class: buildingClass,
-  //     id: "building",
-  //     group: {
-  //       properties: {
-  //         position: position,
-  //       },
-  //     },
-  //   });
-  //   var value = groupMetadata.getProperty("position");
-  //   expect(value).toEqual(position);
-  //   expect(value).not.toBe(position); // The value is cloned
-  // });
+  function testGetUint64(options) {
+    if (
+      !FeatureDetection.supportsBigUint64Array() ||
+      !FeatureDetection.supportsBigInt()
+    ) {
+      return;
+    }
+
+    options = defaultValue(options, defaultValue.EMPTY_OBJECT);
+    var disableBigIntSupport = options.disableBigIntSupport;
+    var disableBigUint64ArraySupport = options.disableBigUint64ArraySupport;
+
+    var originalValues = [
+      BigInt(0), // eslint-disable-line
+      BigInt(10), // eslint-disable-line
+      BigInt("4611686018427387833"), // eslint-disable-line
+      BigInt("18446744073709551615"), // eslint-disable-line
+    ];
+
+    var expectedValues = originalValues;
+
+    if (disableBigUint64ArraySupport && disableBigIntSupport) {
+      // Precision loss is expected if UINT64 is converted to JS numbers
+      expectedValues = [0, 10, 4611686018427388000, 18446744073709552000];
+    }
+
+    var properties = {
+      propertyUint64: {
+        type: "UINT64",
+      },
+    };
+    var propertyValues = {
+      propertyUint64: originalValues,
+    };
+
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+      disableBigUint64ArraySupport: disableBigUint64ArraySupport,
+      disableBigIntSupport: disableBigIntSupport,
+    });
+
+    var length = originalValues.length;
+    for (var i = 0; i < length; ++i) {
+      var value = metadataTable.getProperty(i, "propertyUint64");
+      expect(value).toEqual(expectedValues[i]);
+    }
+  }
+
+  function testGetInt64(options) {
+    options = defaultValue(options, defaultValue.EMPTY_OBJECT);
+    var disableBigIntSupport = options.disableBigIntSupport;
+    var disableBigInt64ArraySupport = options.disableBigInt64ArraySupport;
+
+    var originalValues = [
+      BigInt("-9223372036854775808"), // eslint-disable-line
+      BigInt("-4611686018427387833"), // eslint-disable-line
+      BigInt(-10), // eslint-disable-line
+      BigInt(0), // eslint-disable-line
+      BigInt(10), // eslint-disable-line
+      BigInt("4611686018427387833"), // eslint-disable-line
+      BigInt("9223372036854775807"), // eslint-disable-line
+    ];
+
+    var expectedValues = originalValues;
+
+    if (disableBigInt64ArraySupport && disableBigIntSupport) {
+      // Precision loss is expected if INT64 is converted to JS numbers
+      expectedValues = [
+        -9223372036854776000,
+        -4611686018427388000,
+        -10,
+        0,
+        10,
+        4611686018427388000,
+        9223372036854776000,
+      ];
+    }
+
+    var properties = {
+      propertyInt64: {
+        type: "INT64",
+      },
+    };
+    var propertyValues = {
+      propertyInt64: originalValues,
+    };
+
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+      disableBigInt64ArraySupport: disableBigInt64ArraySupport,
+      disableBigIntSupport: disableBigIntSupport,
+    });
+
+    var length = originalValues.length;
+    for (var i = 0; i < length; ++i) {
+      var value = metadataTable.getProperty(i, "propertyInt64");
+      expect(value).toEqual(expectedValues[i]);
+    }
+  }
+
+  it("getProperty returns UINT64 property as BigInt when BigUint64Array is not supported and BigInt is supported", function () {
+    testGetUint64({
+      disableBigUint64ArraySupport: true,
+    });
+  });
+
+  it("getProperty returns UINT64 property as number when BigUint64Array is not supported and BigInt is not supported", function () {
+    testGetUint64({
+      disableBigUint64ArraySupport: true,
+      disableBigIntSupport: true,
+    });
+  });
+
+  it("getProperty returns INT64 property as BigInt when BigInt64Array is supported and BigInt is supported", function () {
+    testGetInt64();
+  });
+
+  it("getProperty returns INT64 property as BigInt when BigInt64Array is not supported and BigInt is supported", function () {
+    testGetInt64({
+      disableBigInt64ArraySupport: true,
+    });
+  });
+
+  it("getProperty returns INT64 property as number when BigInt64Array is not supported and BigInt is not supported", function () {
+    testGetInt64({
+      disableBigInt64ArraySupport: true,
+      disableBigIntSupport: true,
+    });
+  });
+
+  it("getProperty returns single values", function () {
+    // INT64 and UINT64 are tested above
+    var properties = {
+      propertyInt8: {
+        type: "INT8",
+      },
+      propertyUint8: {
+        type: "UINT8",
+      },
+      propertyInt16: {
+        type: "INT16",
+      },
+      propertyUint16: {
+        type: "UINT16",
+      },
+      propertyInt32: {
+        type: "INT32",
+      },
+      propertyUint32: {
+        type: "UINT32",
+      },
+      propertyFloat32: {
+        type: "FLOAT32",
+      },
+      propertyFloat64: {
+        type: "FLOAT64",
+      },
+      propertyBoolean: {
+        type: "BOOLEAN",
+      },
+      propertyString: {
+        type: "STRING",
+      },
+      propertyEnum: {
+        type: "ENUM",
+        enumType: "myEnum",
+      },
+    };
+
+    var propertyValues = {
+      propertyInt8: [-128, -10, 0, 10, 127],
+      propertyUint8: [0, 10, 20, 30, 255],
+      propertyInt16: [-32768, -10, 0, 10, 32767],
+      propertyUint16: [0, 10, 20, 30, 65535],
+      propertyInt32: [-2147483648, -10, 0, 10, 2147483647],
+      propertyUint32: [0, 10, 20, 30, 4294967295],
+      propertyFloat32: [-2.5, -1.0, 0.0, 700.0, Number.POSITIVE_INFINITY],
+      propertyFloat64: [-234934.12, -1.0, 0.0, 700.0, Number.POSITIVE_INFINITY],
+      propertyBoolean: [false, true, false, true, false],
+      propertyString: ["おはようございます。😃", "a", "", "def", "0001"],
+      propertyEnum: ["ValueA", "ValueB", "Other", "ValueA", "ValueA"],
+    };
+
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+      enums: enums,
+    });
+
+    for (var propertyId in propertyValues) {
+      if (propertyValues.hasOwnProperty(propertyId)) {
+        var expectedValues = propertyValues[propertyId];
+        var length = expectedValues.length;
+        for (var i = 0; i < length; ++i) {
+          var value = metadataTable.getProperty(i, propertyId);
+          expect(value).toEqual(expectedValues[i]);
+        }
+      }
+    }
+  });
+
+  it("getProperty returns fixed size arrays", function () {
+    var properties = {
+      propertyInt8: {
+        type: "ARRAY",
+        componentType: "INT8",
+        componentCount: 3,
+      },
+      propertyUint8: {
+        type: "ARRAY",
+        componentType: "UINT8",
+        componentCount: 3,
+      },
+      propertyInt16: {
+        type: "ARRAY",
+        componentType: "INT16",
+        componentCount: 3,
+      },
+      propertyUint16: {
+        type: "ARRAY",
+        componentType: "UINT16",
+        componentCount: 3,
+      },
+      propertyInt32: {
+        type: "ARRAY",
+        componentType: "INT32",
+        componentCount: 3,
+      },
+      propertyUint32: {
+        type: "ARRAY",
+        componentType: "UINT32",
+        componentCount: 3,
+      },
+      propertyInt64: {
+        type: "ARRAY",
+        componentType: "INT64",
+        componentCount: 3,
+      },
+      propertyUint64: {
+        type: "ARRAY",
+        componentType: "UINT64",
+        componentCount: 3,
+      },
+      propertyFloat32: {
+        type: "ARRAY",
+        componentType: "FLOAT32",
+        componentCount: 3,
+      },
+      propertyFloat64: {
+        type: "ARRAY",
+        componentType: "FLOAT64",
+        componentCount: 3,
+      },
+      propertyBoolean: {
+        type: "ARRAY",
+        componentType: "BOOLEAN",
+        componentCount: 3,
+      },
+      propertyString: {
+        type: "ARRAY",
+        componentType: "STRING",
+        componentCount: 3,
+      },
+      propertyEnum: {
+        type: "ARRAY",
+        componentType: "ENUM",
+        enumType: "myEnum",
+        componentCount: 3,
+      },
+    };
+
+    var propertyValues = {
+      propertyInt8: [
+        [-2, -1, 0],
+        [1, 2, 3],
+      ],
+      propertyUint8: [
+        [0, 1, 2],
+        [3, 4, 5],
+      ],
+      propertyInt16: [
+        [-2, -1, 0],
+        [1, 2, 3],
+      ],
+      propertyUint16: [
+        [0, 1, 2],
+        [3, 4, 5],
+      ],
+      propertyInt32: [
+        [-2, -1, 0],
+        [1, 2, 3],
+      ],
+      propertyUint32: [
+        [0, 1, 2],
+        [3, 4, 5],
+      ],
+      propertyInt64: [
+        [BigInt(-2), BigInt(-1), BigInt(0)], // eslint-disable-line
+        [BigInt(1), BigInt(2), BigInt(3)], // eslint-disable-line
+      ],
+      propertyUint64: [
+        [BigInt(0), BigInt(1), BigInt(2)], // eslint-disable-line
+        [BigInt(3), BigInt(4), BigInt(5)], // eslint-disable-line
+      ],
+      propertyFloat32: [
+        [-2.0, -1.0, 0.0],
+        [1.0, 2.0, 3.0],
+      ],
+      propertyFloat64: [
+        [-2.0, -1.0, 0.0],
+        [1.0, 2.0, 3.0],
+      ],
+      propertyBoolean: [
+        [false, true, false],
+        [true, false, true],
+      ],
+      propertyString: [
+        ["a", "bc", "def"],
+        ["dog", "cat", "😃😃😃"],
+      ],
+      propertyEnum: [
+        ["ValueA", "ValueB", "Other"],
+        ["ValueA", "ValueA", "ValueA"],
+      ],
+    };
+
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+      enums: enums,
+    });
+
+    for (var propertyId in propertyValues) {
+      if (propertyValues.hasOwnProperty(propertyId)) {
+        var expectedValues = propertyValues[propertyId];
+        var length = expectedValues.length;
+        for (var i = 0; i < length; ++i) {
+          var value = metadataTable.getProperty(i, propertyId);
+          expect(value).toEqual(expectedValues[i]);
+        }
+      }
+    }
+  });
+
+  it("getProperty returns variable size arrays", function () {
+    var properties = {
+      propertyInt8: {
+        type: "ARRAY",
+        componentType: "INT8",
+      },
+      propertyUint8: {
+        type: "ARRAY",
+        componentType: "UINT8",
+      },
+      propertyInt16: {
+        type: "ARRAY",
+        componentType: "INT16",
+      },
+      propertyUint16: {
+        type: "ARRAY",
+        componentType: "UINT16",
+      },
+      propertyInt32: {
+        type: "ARRAY",
+        componentType: "INT32",
+      },
+      propertyUint32: {
+        type: "ARRAY",
+        componentType: "UINT32",
+      },
+      propertyInt64: {
+        type: "ARRAY",
+        componentType: "INT64",
+      },
+      propertyUint64: {
+        type: "ARRAY",
+        componentType: "UINT64",
+      },
+      propertyFloat32: {
+        type: "ARRAY",
+        componentType: "FLOAT32",
+      },
+      propertyFloat64: {
+        type: "ARRAY",
+        componentType: "FLOAT64",
+      },
+      propertyBoolean: {
+        type: "ARRAY",
+        componentType: "BOOLEAN",
+      },
+      propertyString: {
+        type: "ARRAY",
+        componentType: "STRING",
+      },
+      propertyEnum: {
+        type: "ARRAY",
+        componentType: "ENUM",
+        enumType: "myEnum",
+      },
+    };
+
+    var propertyValues = {
+      propertyInt8: [[-2], [-1, 0], [1, 2, 3], []],
+      propertyUint8: [[0], [1, 2], [3, 4, 5], []],
+      propertyInt16: [[-2], [-1, 0], [1, 2, 3], []],
+      propertyUint16: [[0], [1, 2], [3, 4, 5], []],
+      propertyInt32: [[-2], [-1, 0], [1, 2, 3], []],
+      propertyUint32: [[0], [1, 2], [3, 4, 5], []],
+      propertyInt64: [
+        [BigInt(-2)], // eslint-disable-line
+        [BigInt(-1), BigInt(0)], // eslint-disable-line
+        [BigInt(1), BigInt(2), BigInt(3)], // eslint-disable-line
+        [],
+      ],
+      propertyUint64: [
+        [BigInt(0)], // eslint-disable-line
+        [BigInt(1), BigInt(2)], // eslint-disable-line
+        [BigInt(3), BigInt(4), BigInt(5)], // eslint-disable-line
+        [],
+      ],
+      propertyFloat32: [[-2.0], [-1.0, 0.0], [1.0, 2.0, 3.0], []],
+      propertyFloat64: [[-2.0], [-1.0, 0.0], [1.0, 2.0, 3.0], []],
+      propertyBoolean: [[false], [true, false], [true, false, true], []],
+      propertyString: [["a"], ["bc", "def"], ["dog", "cat", "😃😃😃"], []],
+      propertyEnum: [
+        ["ValueA"],
+        ["ValueB", "Other"],
+        ["ValueA", "ValueA", "ValueA"],
+        [],
+      ],
+    };
+
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+      enums: enums,
+    });
+
+    for (var propertyId in propertyValues) {
+      if (propertyValues.hasOwnProperty(propertyId)) {
+        var expectedValues = propertyValues[propertyId];
+        var length = expectedValues.length;
+        for (var i = 0; i < length; ++i) {
+          var value = metadataTable.getProperty(i, propertyId);
+          expect(value).toEqual(expectedValues[i]);
+        }
+      }
+    }
+  });
+
+  it("getProperty returns normalized values", function () {
+    var properties = {
+      propertyInt8: {
+        type: "INT8",
+        normalized: true,
+      },
+      propertyUint8: {
+        type: "UINT8",
+        componentType: "UINT8",
+        normalized: true,
+      },
+      propertyInt16: {
+        type: "INT16",
+        componentType: "INT16",
+        normalized: true,
+      },
+      propertyUint16: {
+        type: "UINT16",
+        componentType: "UINT16",
+        normalized: true,
+      },
+      propertyInt32: {
+        type: "INT32",
+        componentType: "INT32",
+        normalized: true,
+      },
+      propertyUint32: {
+        type: "UINT32",
+        componentType: "UINT32",
+        normalized: true,
+      },
+      propertyInt64: {
+        type: "INT64",
+        componentType: "INT64",
+        normalized: true,
+      },
+      propertyUint64: {
+        type: "UINT64",
+        componentType: "UINT64",
+        normalized: true,
+      },
+      propertyFloat32: {
+        type: "FLOAT32",
+        componentType: "FLOAT32",
+        normalized: true, // Should be ignored
+      },
+      propertyFloat64: {
+        type: "FLOAT64",
+        componentType: "FLOAT64",
+        normalized: true, // Should be ignored
+      },
+      propertyBoolean: {
+        type: "BOOLEAN",
+        componentType: "BOOLEAN",
+        normalized: true, // Should be ignored
+      },
+      propertyString: {
+        type: "STRING",
+        componentType: "STRING",
+        normalized: true, // Should be ignored
+      },
+      propertyEnum: {
+        type: "ENUM",
+        componentType: "ENUM",
+        enumType: "myEnum",
+        normalized: true, // Should be ignored
+      },
+      propertyInt64Array: {
+        type: "ARRAY",
+        componentType: "INT64",
+        normalized: true,
+      },
+      propertyUint64Array: {
+        type: "ARRAY",
+        componentType: "UINT64",
+        componentCount: 2,
+        normalized: true,
+      },
+      propertyEnumArray: {
+        type: "ARRAY",
+        componentType: "ENUM",
+        enumType: "myEnum",
+        componentCount: 3,
+        normalized: true, // Should be ignored
+      },
+    };
+
+    var propertyValues = {
+      propertyInt8: [-128, -10, 0, 10, 127],
+      propertyUint8: [0, 10, 20, 30, 255],
+      propertyInt16: [-32768, -10, 0, 10, 32767],
+      propertyUint16: [0, 10, 20, 30, 65535],
+      propertyInt32: [-2147483648, -10, 0, 10, 2147483647],
+      propertyUint32: [0, 10, 20, 30, 4294967295],
+      propertyInt64: [
+        BigInt("-9223372036854775808"), // eslint-disable-line
+        BigInt("-4611686018427387833"), // eslint-disable-line
+        BigInt(0), // eslint-disable-line
+        BigInt(10), // eslint-disable-line
+        BigInt("9223372036854775807"), // eslint-disable-line
+      ],
+      propertyUint64: [
+        BigInt(0), // eslint-disable-line
+        BigInt(10), // eslint-disable-line
+        BigInt(30), // eslint-disable-line
+        BigInt("4611686018427387833"), // eslint-disable-line
+        BigInt("18446744073709551615"), // eslint-disable-line
+      ],
+      propertyFloat32: [-2.5, -1.0, 0.0, 700.0, Number.POSITIVE_INFINITY],
+      propertyFloat64: [-234934.12, -1.0, 0.0, 700.0, Number.POSITIVE_INFINITY],
+      propertyBoolean: [false, true, false, true, false],
+      propertyString: ["a", "b", "c", "d", "e"],
+      propertyEnum: ["ValueA", "ValueB", "Other", "ValueA", "ValueA"],
+      propertyInt64Array: [
+        [BigInt(-2)], // eslint-disable-line
+        [BigInt(-1), BigInt(0)], // eslint-disable-line
+        [BigInt(1), BigInt(2), BigInt(3)], // eslint-disable-line
+        [],
+      ],
+    };
+
+    var propertyValues = {
+      propertyInt8: [-2, -1, 0],
+      propertyUint8: [
+        [0, 1, 2],
+        [3, 4, 5],
+      ],
+      propertyInt16: [
+        [-2, -1, 0],
+        [1, 2, 3],
+      ],
+      propertyUint16: [
+        [0, 1, 2],
+        [3, 4, 5],
+      ],
+      propertyInt32: [
+        [-2, -1, 0],
+        [1, 2, 3],
+      ],
+      propertyUint32: [
+        [0, 1, 2],
+        [3, 4, 5],
+      ],
+      propertyInt64: [
+        [BigInt(-2), BigInt(-1), BigInt(0)], // eslint-disable-line
+        [BigInt(1), BigInt(2), BigInt(3)], // eslint-disable-line
+      ],
+      propertyUint64: [
+        [BigInt(0), BigInt(1), BigInt(2)], // eslint-disable-line
+        [BigInt(3), BigInt(4), BigInt(5)], // eslint-disable-line
+      ],
+      propertyFloat32: [
+        [-2.0, -1.0, 0.0],
+        [1.0, 2.0, 3.0],
+      ],
+      propertyFloat64: [
+        [-2.0, -1.0, 0.0],
+        [1.0, 2.0, 3.0],
+      ],
+      propertyBoolean: [
+        [false, true, false],
+        [true, false, true],
+      ],
+      propertyString: [
+        ["a", "bc", "def"],
+        ["dog", "cat", "😃😃😃"],
+      ],
+      propertyEnum: [
+        ["ValueA", "ValueB", "Other"],
+        ["ValueA", "ValueA", "ValueA"],
+      ],
+    };
+
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+      enums: enums,
+    });
+
+    for (var propertyId in propertyValues) {
+      if (propertyValues.hasOwnProperty(propertyId)) {
+        var expectedValues = propertyValues[propertyId];
+        var length = expectedValues.length;
+        for (var i = 0; i < length; ++i) {
+          var value = metadataTable.getProperty(i, propertyId);
+          expect(value).toEqual(expectedValues[i]);
+        }
+      }
+    }
+  });
 
   it("getProperty returns the default value when the property is missing", function () {
     var position = [0.0, 0.0, 0.0];
@@ -477,7 +1174,10 @@ describe("Scene/MetadataTable", function () {
       name: ["A", "B"],
     };
 
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     var value = metadataTable.getProperty(0, "position");
     expect(value).toEqual(position);
@@ -493,7 +1193,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.getProperty();
@@ -509,7 +1212,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.getProperty(0);
@@ -525,8 +1231,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
-
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
     expect(function () {
       metadataTable.getProperty(-1, "height");
     }).toThrowDeveloperError();
@@ -585,7 +1293,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     metadataTable.setProperty(0, "name", "A");
     expect(metadataTable.getProperty(0, "name")).toBeUndefined();
@@ -600,7 +1311,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.setProperty();
@@ -616,7 +1330,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.setProperty(0);
@@ -632,7 +1349,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.setProperty(0, "height");
@@ -648,7 +1368,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.setProperty(-1, "height", 0.0);
@@ -678,7 +1401,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(metadataTable.getPropertyBySemantic(0, "_HEIGHT")).toBeUndefined();
   });
@@ -693,7 +1419,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(metadataTable.getPropertyBySemantic(0, "_HEIGHT")).toBe(1.0);
   });
@@ -708,7 +1437,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.getPropertyBySemantic();
@@ -725,7 +1457,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.getPropertyBySemantic(0);
@@ -742,7 +1477,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.getPropertyBySemantic(-1, "_HEIGHT");
@@ -774,7 +1512,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     metadataTable.setPropertyBySemantic(0, "_HEIGHT", 20.0);
     expect(metadataTable.getPropertyBySemantic(0, "_HEIGHT")).toBeUndefined();
@@ -790,7 +1531,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     metadataTable.setPropertyBySemantic(0, "_HEIGHT", 20.0);
     expect(metadataTable.getPropertyBySemantic(0, "_HEIGHT")).toBe(20.0);
@@ -806,7 +1550,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.setPropertyBySemantic();
@@ -823,7 +1570,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.setPropertyBySemantic(0);
@@ -840,7 +1590,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.setPropertyBySemantic(0, "_HEIGHT");
@@ -857,7 +1610,10 @@ describe("Scene/MetadataTable", function () {
     var propertyValues = {
       height: [1.0, 2.0],
     };
-    var metadataTable = createTable(properties, propertyValues);
+    var metadataTable = createTable({
+      properties: properties,
+      propertyValues: propertyValues,
+    });
 
     expect(function () {
       metadataTable.setPropertyBySemantic(-1, "_HEIGHT", 0.0);

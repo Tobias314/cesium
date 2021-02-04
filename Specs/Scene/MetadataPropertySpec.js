@@ -1,5 +1,4 @@
 import { MetadataProperty } from "../../Source/Cesium.js";
-import { MetadataComponentType } from "../../Source/Cesium.js";
 import { MetadataEnum } from "../../Source/Cesium.js";
 import { MetadataType } from "../../Source/Cesium.js";
 
@@ -31,7 +30,7 @@ describe("Scene/MetadataProperty", function () {
   it("creates property", function () {
     var max = [32767, 0, 100];
     var min = [-32768, 0, -100];
-    var defaultValues = [0, 0, 0];
+    var propertyDefault = [0, 0, 0];
     var extras = {
       coordinates: [0, 1, 2],
     };
@@ -47,7 +46,7 @@ describe("Scene/MetadataProperty", function () {
         normalized: true,
         max: max,
         min: min,
-        default: defaultValues,
+        default: propertyDefault,
         optional: false,
         semantic: "_POSITION",
         extras: extras,
@@ -59,12 +58,12 @@ describe("Scene/MetadataProperty", function () {
     expect(property.description).toBe("Position (X, Y, Z)");
     expect(property.type).toBe(MetadataType.ARRAY);
     expect(property.enumType).toBeUndefined();
-    expect(property.componentType).toBe(MetadataComponentType.INT16);
+    expect(property.componentType).toBe(MetadataType.INT16);
     expect(property.componentCount).toBe(3);
     expect(property.normalized).toBe(true);
     expect(property.max).toEqual(max);
     expect(property.min).toEqual(min);
-    expect(property.default).toEqual(defaultValues);
+    expect(property.default).toEqual(propertyDefault);
     expect(property.optional).toBe(false);
     expect(property.semantic).toBe("_POSITION");
     expect(property.extras).toEqual(extras);
@@ -72,7 +71,7 @@ describe("Scene/MetadataProperty", function () {
     // Check that JSON properties get cloned
     expect(property.max).not.toBe(max);
     expect(property.min).not.toBe(min);
-    expect(property.default).not.toBe(defaultValues);
+    expect(property.default).not.toBe(propertyDefault);
     expect(property.extras).not.toBe(extras);
   });
 
